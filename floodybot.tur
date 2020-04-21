@@ -1,0 +1,161 @@
+GRAPHICS 17:DIM F$(48),A(5):CH=(PEEK(106)-16)*256
+
+F$="\FB\FB\FB\00\DF\DF\DF\00\08\61\B4\D0\66\0B\2D\86\7E\42\42\7E\99\7E\BD\66\3E\2A\14\3E\5D\1C\36\77\80\51\2A\04\80\45\2A\10"
+
+MOVE 57344,CH,1024:MOVE ADR(F$),CH+8,40:POKE 756,CH/256
+
+A(0)=2:A(1)=-40:A(2)=-2:A(3)=40
+SC=DPEEK(88):'Top of screen memory
+'L=8 :'starting level -1 for testing
+
+DO :'main loop
+	'set up level
+	A=SC+21+(16*RAND(2)):'robot starts in either upper corner
+
+	G=0:GG=0:L=L+1:BM=1
+
+	W=16*(L+3)+8:WHILE W>255:W=W-258:WEND
+	POKE 710,W:'change brick color per level
+	POKE 709,136:'Water color
+	POKE 711,56:'Bomb color
+
+	POSITION 0,0:'fill screen with bricks
+	FOR I=1 TO 23:FOR J=1 TO 19:?#6;"\A1";:NEXT J:?#6:NEXT I
+
+	'draw the level letter in either lower corner in bricks
+	COLOR 161:TEXT 11*RAND(2),15,CHR$(64+L)
+		'161=129 (Wall character) + 32 for the correct color
+
+	'hide character set while drawing maze
+	POKE 708,0
+
+	'based on Maze Generator by Charles Bond, Compute! Magazine Issue 19
+	'https://archive.org/details/1981-12-compute-magazine/page/n55
+
+	POKE A,5 :'place a marker at the maze starting point
+	MR=1:'MR=1: Start with a Random number, MR=0: iterating
+	REPEAT
+		BT=1:'BT=0: blazing a new path. BT=1: we're BackTracking
+		IF MR:'MR=do we want a random number to start looking for a valid direction?
+			J=INT(RND(0)*4):X=J:'J=pick a random direction. X=remember our starting dir.
+		ENDIF
+		B=A+A(J):'look forward to possible next space
+		IF PEEK(B)=129:'is it a wall character? Make it a hallway 
+			POKE B,J+1:'leave appropiate bread crumb for backtracking
+			POKE A+A(J)/2,0:'draw hall character on the even column 
+			A=B:'possible next space promoted to new space
+			MR=1:BT=0:'we'll pick a random direction to go from here
+		ELSE:'its not a wall, so we can't use it. check another direction
+			J=(J+1)*(J<3):'iterate 1-2-3-0-1-2-3...
+			IF J<>X
+				MR=0:BT=0:'we haven't tested all 4 yet, so look in next direction
+			ENDIF
+		ENDIF
+		IF BT:'we've tried all 4 directions with no luck. Time to backtrack
+			J=PEEK(A):'get breadcrumb on current space
+			W=PEEK(A-1)+PEEK(A+1)+PEEK(A-20)+PEEK(A+20)=387*(J<5)
+			POKE A,4*W
+						'if there walls on 3 sides, it's a dead end, so draw guy (chr 4)
+						'(except on the staring spot: no guy there)
+						'else draw hall character (0) to erase unsightly breadcrumb
+			G=G+W:'G=number of guys to collect
+			A=A-A(J-1):'change current space to the one pointed to by the breadcrumb
+		ENDIF
+	UNTIL J=5 :'when we've backtracked back to the starting point, maze is done!
+
+	IF G<6	:'if the maze generated fewer than 6 people, it's not good, create another
+		GG=9:G=0 :'this is hacky but oh well
+		L=L-1
+		LOOP
+	ENDIF
+
+	'reveal character set
+	POKE 708,26
+
+	WL=23:'initial water level
+	C=100-L*10:'countdown before water first appears.
+	C=C+(25-C)*(C<25):'IF C<25:C=25
+	REPEAT
+		POKE A,3
+		PAUSE 5
+		
+		J=STICK(0)
+		B=A+(J=7)-(J=11)
+		B=B+20*((J=13)-(J=14))
+		IF PEEK(B)=0
+			POKE A,0
+			A=B
+			SOUND 0,99,6,8
+			SOUND
+			POKE 77,0
+		ENDIF
+		IF PEEK(B)=4:'if robot touched a human
+			G=G-1:'one less human waiting to be saved
+			GG=GG+1:'+1 humans saved on this level
+			S=S+L*((A-SC) DIV 20):'higher levels and deeper humans increase score more
+			POKE A,0:A=B:'erase human
+			POS.0,23:?#6;S;" ":'update score
+			SOUND 0,60,10,8:PAUSE 5:SOUND
+		ENDIF
+
+		IF PEEK(53279)<7 :'press start to self-destruct
+			POKE A,2
+			SOUND 0,99,8,8:PAUSE 10:SOUND
+			EXIT
+		ENDIF
+
+		IF STRIG(0)=0 AND BM:'player pressed the fire button
+			BM=0:'One bomb per level
+			Y=SC+20*((A-SC) DIV 20):'screen RAM left edge of player Y ((A-SC) DIV 20)
+			FOR W=-1 TO 0:'first draw fire then erase it
+				FOR X=1 TO 18:'up to 18 fire characters in either direction
+					SOUND 1,50+X,8,8
+					FOR I=0 TO 1:'iterate for left and right sides
+						IF I:'don't extend past left edge
+							B=A-X:'player screen pos minus offset
+							J=B>Y
+						ELSE:'don't extend past right edge
+							B=A+X
+							J=B<Y+18
+						ENDIF
+						IF J
+							IF PEEK(B)=4:'aw, you're blowing up a guy
+								G=G-1:'there's one fewer guy onscreen
+								S=S-25*L:'lose points
+								POS.0,23:?#6;S;" ":'update onscreen score
+								SOUND 0,250,10,15:'boop
+							ENDIF
+							POKE B,W*-194:'draw, erase splody. chr=194, erase=0
+						ENDIF
+					NEXT I	
+				NEXT X
+			NEXT W
+			SOUND
+		ENDIF
+		
+		IF C<1:'time to raise the water level
+			WL=WL-1
+			C=60-5*L:'countdown till it rises again. 
+			C=C+(10-C)*(C<10):'maximum speed (IF C<10:C=10)
+			FOR X=0 TO 18
+				SOUND 1,36-X*2,8,8
+				Z=SC+WL*20+X
+				IF PEEK(Z)=4:'reduce guy count if it flooded a guy
+					G=G-1
+					SOUND 0,200,10,15:'boop
+					POKE Z,69
+				ENDIF 
+				IF PEEK(Z)=0:POKE Z,69:ENDIF:'draw flooding over guys and hall
+			NEXT X
+			SOUND
+		ELSE
+			C=C-1:'tick down the timer
+		ENDIF
+	UNTIL G=0
+
+	IF GG>2
+		LOOP
+	ENDIF
+
+POS.0,23:?#6;S;"   GAME OVER"
+WHILE STRIG(0):WEND:RUN
